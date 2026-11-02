@@ -1,0 +1,17 @@
+{
+    "ID12900": {
+        "name": "Student 1",
+        "attention_rate": 70,
+        "status": "Attentive"
+    },
+    "ID12901": {
+        "name": "Student 2",
+        "attention_rate": 59,
+        "status": "Distracted"
+    },
+    "ID12902": {
+        "name": "Student 3",
+        "attention_rate": 78,
+        "status": "Moderate"
+    }
+}
