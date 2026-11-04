@@ -215,8 +215,13 @@ with dashboard_tab:
     use_container_width=True,
     key="dashboard_gauge"
 )
+# Normalize analytics keys
+analytics = {
+    str(k).lower(): v
+    for k, v in analytics.items()
+}
 
-    chart_df = pd.DataFrame({
+chart_df = pd.DataFrame({
     "Behavior": [
         "Attentive",
         "Distracted",
@@ -231,52 +236,45 @@ with dashboard_tab:
     ]
 })
 
-    fig = px.bar(
+fig = px.bar(
     chart_df,
     x="Behavior",
     y="Count",
-    color="Behavior"
+    text="Count",
+    color="Behavior",
+    title="Classroom Behaviour Distribution"
 )
 
-    st.json(detections)
+fig.update_traces(
+    textposition="outside"
+)
 
-
-# ==================================================
+st.plotly_chart(
+    fig,
+    use_container_width=True,
+    key="behavior_chart"
+)
 # STUDENTS TAB
 # ==================================================
 with students_tab:
-    st.subheader(
-        "Student Analytics"
-    )
+
+    st.subheader("Student Analytics")
+
     rows = []
+
     for student_id, data in students.items():
 
         rows.append({
-            "Student ID":
-            student_id,
-
-            "Name":
-            data.get(
-                "name",
-                "Unknown"
-            ),
-
-            "Attention Rate":
-            data.get(
-                "attention_rate",
-                0
-            ),
-
-            "Status":
-            data.get(
-                "status",
-                "Unknown"
-            )
+            "Student ID": student_id,
+            "Name": data.get("name", "Unknown"),
+            "Attention Rate": data.get("attention_rate", 0),
+            "Status": data.get("status", "Unknown")
         })
 
     student_df = pd.DataFrame(rows)
 
     if not student_df.empty:
+
         st.dataframe(
             student_df,
             use_container_width=True,
@@ -285,24 +283,118 @@ with students_tab:
 
         ranking_chart = px.bar(
             student_df,
-
             x="Student ID",
-
             y="Attention Rate",
-
             color="Attention Rate",
-
             text="Attention Rate",
-
             title="Student Attention Ranking"
         )
 
         st.plotly_chart(
-        fig,
+            ranking_chart,
+            use_container_width=True,
+            key="student_ranking_chart"
+        )
+if not student_df.empty:
+
+    heatmap_df = pd.DataFrame(
+        [student_df["Attention Rate"].tolist()]
+    )
+
+    heatmap = px.imshow(
+        heatmap_df,
+        text_auto=True,
+        color_continuous_scale="RdYlGn",
+        title="Attention Heatmap"
+    )
+
+    st.plotly_chart(
+        heatmap,
         use_container_width=True,
-        key="behavior_chart"
-         )
-    
+        key="attention_heatmap"
+    )
+if not student_df.empty:
+
+    leaderboard = student_df.sort_values(
+        by="Attention Rate",
+        ascending=False
+    )
+
+    st.subheader("🏆 Attention Leaderboard")
+
+    st.dataframe(
+        leaderboard,
+        use_container_width=True,
+        hide_index=True
+    )
+
+    leaderboard_chart = px.bar(
+        leaderboard,
+        x="Name",
+        y="Attention Rate",
+        color="Attention Rate",
+        text="Attention Rate",
+        title="Student Attention Leaderboard"
+    )
+
+    st.plotly_chart(
+        leaderboard_chart,
+        use_container_width=True,
+        key="leaderboard_chart"
+    )
+    if not student_df.empty:
+
+        best_student = student_df.loc[
+        student_df["Attention Rate"].idxmax()
+    ]
+
+    worst_student = student_df.loc[
+        student_df["Attention Rate"].idxmin()
+    ]
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.success(
+            f"🥇 Most Attentive: "
+            f"{best_student['Name']} "
+            f"({best_student['Attention Rate']}%)"
+        )
+
+    with col2:
+        st.error(
+            f"⚠ Least Attentive: "
+            f"{worst_student['Name']} "
+            f"({worst_student['Attention Rate']}%)"
+        )
+    st.subheader("❤️ Pulse Alerts")
+
+for student_id, data in students.items():
+
+    pulse = data.get(
+        "pulse",
+        0
+    )
+
+    if pulse and pulse < 50:
+
+        st.error(
+            f"{data.get('name')} - {pulse} BPM"
+        )
+else:
+
+        st.info(
+            "No students registered yet."
+        )
+        
+        
+         
+# ==================================================
+# register TAB
+# ==================================================
+     
+        
+        
 with register_tab:
 
     st.subheader("Student Registration")
@@ -345,9 +437,14 @@ with register_tab:
                 students = {}
 
             students[student_id] = {
-                "name": student_name,
-                "photo": f"{student_id}.jpg"
-            }
+            "name": student_name,
+            "photo": f"{student_id}.jpg",
+            "attention_rate": 0,
+            "pulse": 0,
+            "status": "Unknown",
+            "sleepy_count": 0,
+            "distracted_count": 0
+}
 
             with open(
                 students_file,
@@ -391,21 +488,29 @@ with monitoring_tab:
             "Camera Snapshot"
         ]
     )
+
     st.subheader("Live Webcam")
 
     webrtc_streamer(
-    key="webcam",
-    media_stream_constraints={
-        "video": True,
-        "audio": False
-    }
-)
+        key="webcam",
+        media_stream_constraints={
+            "video": True,
+            "audio": False
+        }
+    )
+
+    st.divider()
+
+    # ===============================
     # IMAGE
+    # ===============================
+
     if source == "Upload Image":
 
         uploaded_image = st.file_uploader(
             "Upload Classroom Image",
-            type=["jpg", "jpeg", "png"]
+            type=["jpg", "jpeg", "png"],
+            key="image_upload"
         )
 
         if uploaded_image is not None:
@@ -417,7 +522,7 @@ with monitoring_tab:
 
             if st.button(
                 "Analyze Image",
-                key="analyze_image_btn"
+                key="analyze_image"
             ):
 
                 with tempfile.NamedTemporaryFile(
@@ -430,11 +535,12 @@ with monitoring_tab:
                     )
 
                     temp_path = tmp_file.name
+                    
+                result = analyze_image(temp_path)
 
-                result = analyze_image(
-                    temp_path
-                )
+                st.session_state["analysis_result"] = result
 
+                st.rerun()
                 st.session_state[
                     "analysis_result"
                 ] = result
@@ -445,94 +551,27 @@ with monitoring_tab:
 
                 st.json(result)
 
+    # ===============================
     # VIDEO
+    # ===============================
+
     elif source == "Upload Video":
 
         uploaded_video = st.file_uploader(
             "Upload Classroom Video",
-            type=["mp4", "avi", "mov"]
+            type=["mp4", "avi", "mov"],
+            key="video_upload"
         )
 
         if uploaded_video is not None:
 
             st.video(uploaded_video)
 
-            st.success(
-                "Video uploaded successfully"
-            )
-        st.divider()
-
-st.subheader("CCTV / RTSP Monitoring")
-
-rtsp_url = st.text_input(
-    "RTSP URL",
-    value="rtsp://username:password@camera_ip:554/stream"
-)
-
-start_cctv = st.button(
-    "Start CCTV Feed",
-    key="start_cctv"
-)
-if start_cctv:
-
-    cap = cv2.VideoCapture(rtsp_url)
-
-    frame_placeholder = st.empty()
-
-    stop_button = st.button(
-        "Stop CCTV Feed",
-        key="stop_cctv"
-    )
-
-    while cap.isOpened():
-
-        ret, frame = cap.read()
-
-        if not ret:
-            st.error("Unable to read CCTV stream")
-            break
-
-        rgb = cv2.cvtColor(
-            frame,
-            cv2.COLOR_BGR2RGB
-        )
-
-        frame_placeholder.image(
-            rgb,
-            channels="RGB",
-            use_container_width=True
-        )
-
-        if stop_button:
-            break
-
-    cap.release()
-    
-    while cap.isOpened():
-
-        ret, frame = cap.read()
-
-        if not ret:
-            st.error("Unable to read CCTV stream")
-            break
-
-        rgb = cv2.cvtColor(
-            frame,
-            cv2.COLOR_BGR2RGB
-        )
-
-        frame_placeholder.image(
-            rgb,
-            channels="RGB",
-            use_container_width=True
-        )
-
-        if stop_button:
-            break
-
-    cap.release()
+    # ===============================
     # CAMERA
-elif source == "Camera Snapshot":
+    # ===============================
+
+    elif source == "Camera Snapshot":
 
         snapshot = st.camera_input(
             "Take Photo"
@@ -542,7 +581,7 @@ elif source == "Camera Snapshot":
 
             if st.button(
                 "Analyze Snapshot",
-                key="analyze_snapshot_btn"
+                key="analyze_snapshot"
             ):
 
                 with tempfile.NamedTemporaryFile(
@@ -570,10 +609,50 @@ elif source == "Camera Snapshot":
 
                 st.json(result)
 
-                st.plotly_chart(
-                    fig,
-                    width="stretch"
+    st.divider()
+
+    # ===============================
+    # CCTV
+    # ===============================
+
+    st.subheader("CCTV / RTSP Monitoring")
+
+    rtsp_url = st.text_input(
+        "RTSP URL",
+        key="rtsp_url"
+    )
+
+    if st.button(
+        "Start CCTV Feed",
+        key="start_cctv"
+    ):
+
+        cap = cv2.VideoCapture(rtsp_url)
+
+        frame_placeholder = st.empty()
+
+        while cap.isOpened():
+
+            ret, frame = cap.read()
+
+            if not ret:
+                st.error(
+                    "Unable to read CCTV stream"
                 )
+                break
+
+            rgb = cv2.cvtColor(
+                frame,
+                cv2.COLOR_BGR2RGB
+            )
+
+            frame_placeholder.image(
+                rgb,
+                channels="RGB",
+                use_container_width=True
+            )
+
+        cap.release()
 
 # ==================================================
 # REPORTS TAB
