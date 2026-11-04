@@ -1,10 +1,19 @@
-import requests
+import os
+import json
+import tempfile
+from io import BytesIO
+
 import pandas as pd
-import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
+from streamlit_webrtc import webrtc_streamer
+from Backend.detect import analyze_image
+import cv2
+import threading
+import streamlit as st
+# API_URL = "https://your-api.onrender.com"
 
-API_URL = "http://127.0.0.1:8000"
+
 
 # ==================================================
 # CONFIG
@@ -16,63 +25,109 @@ st.set_page_config(
     layout="wide"
 )
 
+
 # ==================================================
 # HELPERS
 # ==================================================
 
-def fetch_data(endpoint, default=None):
-
-    try:
-
-        response = requests.get(
-            f"{API_URL}{endpoint}",
-            timeout=10
-        )
-        
-        
-
-        if response.status_code == 200:
-
-            return response.json()
-
-    except Exception:
-
-        pass
-
-    return default
 
 
 # ==================================================
 # LOAD DATA
 # ==================================================
+dashboard = st.session_state.get(
+    "analysis_result",
+    {}
+)
+student_df = pd.DataFrame()
 
-dashboard = fetch_data("/dashboard", {})
-analytics = fetch_data("/analytics", {})
-detections = fetch_data("/detections", {})
-teacher_alert = fetch_data("/teacher-alert", {})
-students = fetch_data("/students", {})
-history = fetch_data(
-    "/attention-history",
+analytics = dashboard.get(
+    "counts",
     {}
 )
 
+detections = analytics
+
+# Teacher Alert
+final_score = dashboard.get(
+    "final_score",
+    0
+)
+
+if final_score >= 80:
+    teacher_alert = {
+        "alert_color": "GREEN",
+        "score": final_score,
+        "status": "Classroom Performing Well"
+    }
+
+elif final_score >= 60:
+    teacher_alert = {
+        "alert_color": "YELLOW",
+        "score": final_score,
+        "status": "Moderate Attention"
+    }
+
+else:
+    teacher_alert = {
+        "alert_color": "RED",
+        "score": final_score,
+        "status": "Immediate Intervention Required"
+    }
+
+# Students
+students_file = "Backend/results/students.json"
+
+if os.path.exists(students_file):
+    with open(students_file, "r") as f:
+        students = json.load(f)
+else:
+    students = {}
+
+# History
+history_file = "Backend/results/attention_history.json"
+
+if os.path.exists(history_file):
+    with open(history_file, "r") as f:
+        history = json.load(f)
+else:
+    history = {
+        "labels": [],
+        "attention": [],
+        "engagement": [],
+        "pulse": []
+    }
 # ==================================================
 # HEADER
 # ==================================================
 
+
 st.title("AI Classroom Monitoring")
+
+
 
 st.caption(
     "Classroom Attention and Engagement Analytics"
 )
 
+
+
 # ==================================================
 # REFRESH
 # ==================================================
 
-if st.button("Refresh Dashboard"):
+
+
+if st.button(
+    "Refresh Dashboard",
+    key="refresh_dashboard"
+):
+
+
 
     st.rerun()
+
+
 
 # ==================================================
 # TABS
@@ -88,184 +143,115 @@ dashboard_tab, students_tab, monitoring_tab, reports_tab, register_tab = st.tabs
     ]
 )
 
-# ==================================================
-# DASHBOARD TAB
-# ==================================================
-
 with dashboard_tab:
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
 
-    col1.metric(
-        "Attention Score",
-        f"{dashboard.get('attention_score',0):.2f}%"
+    pulse_data = history.get("pulse", [0])
+
+    current_pulse = (
+        pulse_data[-1]
+        if pulse_data
+        else 0
     )
+    col1.metric(
+    "Attention Score",
+    f"{dashboard.get('attention_score',0):.2f}%"
+)
 
     col2.metric(
-        "Alertness Score",
-        f"{dashboard.get('alertness_score',0):.2f}%"
-    )
+    "Alertness Score",
+    f"{dashboard.get('alertness_score',0):.2f}%"
+)
 
     col3.metric(
-        "Final Score",
-        f"{dashboard.get('final_score',0):.2f}%"
-    )
+    "Final Score",
+    f"{dashboard.get('final_score',0):.2f}%"
+)
+    col4.metric(
+    "Pulse (BPM)",
+    current_pulse
+)
 
     st.subheader("Classroom Status")
 
     status = dashboard.get(
         "status",
-        "Unknown"
+        "Class Not Analysed Yet"
     )
 
     if "Highly" in status:
-
         st.success(status)
 
     elif "Moderately" in status:
-
         st.warning(status)
 
     else:
-
         st.error(status)
 
     gauge = go.Figure(
-        go.Indicator(
-            mode="gauge+number",
-            value=dashboard.get(
-                "final_score",
-                0
-            ),
-            title={
-                "text":
-                "Classroom Performance"
+    go.Indicator(
+        mode="gauge+number",
+        value=dashboard.get(
+            "final_score",
+            0
+        ),
+        title={
+            "text": "Classroom Performance"
+        },
+        gauge={
+            "axis": {
+                "range": [0, 100]
             },
-            gauge={
-                "axis": {
-                    "range": [0, 100]
-                },
-                "bar": {
-                    "color":
-                    "royalblue"
-                }
+            "bar": {
+                "color": "royalblue"
             }
-        )
+        }
     )
+)
 
     st.plotly_chart(
-        gauge,
-        use_container_width=True
-    )
-
-    st.subheader(
-        "Behavior Distribution"
-    )
+    gauge,
+    use_container_width=True,
+    key="dashboard_gauge"
+)
 
     chart_df = pd.DataFrame({
-
-        "Behavior": [
-            "Attentive",
-            "Distracted",
-            "Sleepy",
-            "Phone Use"
-        ],
-
-        "Count": [
-
-            analytics.get(
-                "attentive_students",
-                0
-            ),
-
-            analytics.get(
-                "distracted_students",
-                0
-            ),
-
-            analytics.get(
-                "sleepy_students",
-                0
-            ),
-
-            analytics.get(
-                "phone_usage",
-                0
-            )
-        ]
-    })
+    "Behavior": [
+        "Attentive",
+        "Distracted",
+        "Sleepy",
+        "Phone Use"
+    ],
+    "Count": [
+        analytics.get("attentive", 0),
+        analytics.get("distracted", 0),
+        analytics.get("sleepy", 0),
+        analytics.get("phone", 0)
+    ]
+})
 
     fig = px.bar(
-        chart_df,
-        x="Behavior",
-        y="Count",
-        color="Behavior"
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-    st.subheader(
-        "Live Detections"
-    )
+    chart_df,
+    x="Behavior",
+    y="Count",
+    color="Behavior"
+)
 
     st.json(detections)
 
-    st.subheader(
-        "Teacher Alert"
-    )
-
-    alert_color = teacher_alert.get(
-        "alert_color",
-        "RED"
-    )
-
-    score = teacher_alert.get(
-        "score",
-        0
-    )
-
-    teacher_status = teacher_alert.get(
-        "status",
-        "Unknown"
-    )
-
-    if alert_color == "GREEN":
-
-        st.success(
-            f"{teacher_status} | Score: {score}"
-        )
-
-    elif alert_color == "YELLOW":
-
-        st.warning(
-            f"{teacher_status} | Score: {score}"
-        )
-
-    else:
-
-        st.error(
-            f"{teacher_status} | Score: {score}"
-        )
 
 # ==================================================
 # STUDENTS TAB
 # ==================================================
-
 with students_tab:
-
     st.subheader(
         "Student Analytics"
     )
-
     rows = []
-
     for student_id, data in students.items():
 
         rows.append({
-
             "Student ID":
             student_id,
 
@@ -291,7 +277,6 @@ with students_tab:
     student_df = pd.DataFrame(rows)
 
     if not student_df.empty:
-
         st.dataframe(
             student_df,
             use_container_width=True,
@@ -299,7 +284,6 @@ with students_tab:
         )
 
         ranking_chart = px.bar(
-
             student_df,
 
             x="Student ID",
@@ -314,279 +298,362 @@ with students_tab:
         )
 
         st.plotly_chart(
-            ranking_chart,
-            use_container_width=True
-        )
+        fig,
+        use_container_width=True,
+        key="behavior_chart"
+         )
+    
 with register_tab:
 
-    st.subheader(
-        "Student Registration"
-    )
+    st.subheader("Student Registration")
 
-    student_id = st.text_input(
-        "Student ID"
-    )
+    student_id = st.text_input("Student ID")
 
-    student_name = st.text_input(
-        "Student Name"
-    )
+    student_name = st.text_input("Student Name")
 
     photo = st.file_uploader(
         "Student Photo",
-        type=[
-            "jpg",
-            "jpeg",
-            "png"
-        ]
+        type=["jpg", "jpeg", "png"]
     )
 
     if st.button(
-        "Register Student"
+        "Register Student",
+        key="register_student_btn"
     ):
 
-        if photo:
+        if photo is not None:
 
-            files = {
+            photo_dir = "Backend/data/student_photos"
 
-                "file": (
-
-                    photo.name,
-
-                    photo.getvalue(),
-
-                    photo.type
-                )
-            }
-
-            data = {
-
-                "student_id":
-                student_id,
-
-                "student_name":
-                student_name
-            }
-
-            response = requests.post(
-
-                f"{API_URL}/register-student",
-
-                files=files,
-
-                data=data
+            os.makedirs(
+                photo_dir,
+                exist_ok=True
             )
 
+            students_file = "Backend/results/students.json"
+
+            if (
+                os.path.exists(students_file)
+                and os.path.getsize(students_file) > 0
+            ):
+                with open(
+                    students_file,
+                    "r"
+                ) as f:
+                    students = json.load(f)
+            else:
+                students = {}
+
+            students[student_id] = {
+                "name": student_name,
+                "photo": f"{student_id}.jpg"
+            }
+
+            with open(
+                students_file,
+                "w"
+            ) as f:
+                json.dump(
+                    students,
+                    f,
+                    indent=4
+                )
+
+            with open(
+                f"{photo_dir}/{student_id}.jpg",
+                "wb"
+            ) as f:
+                f.write(
+                    photo.getbuffer()
+                )
+
             st.success(
-                response.json()
+                "Student registered successfully."
             )
 
         else:
-
             st.error(
                 "Please upload a photo."
             )
+            
 # ==================================================
 # MONITORING TAB
 # ==================================================
-
 with monitoring_tab:
 
-    st.subheader(
-        "Camera Configuration"
-    )
+    st.subheader("Classroom Monitoring")
 
-    source = st.selectbox(
-
-        "Camera Source",
-
+    source = st.radio(
+        "Select Source",
         [
-            "Laptop Webcam",
-            "iPhone Stream",
-            "CCTV RTSP"
+            "Upload Image",
+            "Upload Video",
+            "Camera Snapshot"
         ]
     )
+    st.subheader("Live Webcam")
 
-    if source == "iPhone Stream":
+    webrtc_streamer(
+    key="webcam",
+    media_stream_constraints={
+        "video": True,
+        "audio": False
+    }
+)
+    # IMAGE
+    if source == "Upload Image":
 
-        st.text_input(
-            "iPhone Stream URL"
+        uploaded_image = st.file_uploader(
+            "Upload Classroom Image",
+            type=["jpg", "jpeg", "png"]
         )
 
-    elif source == "CCTV RTSP":
+        if uploaded_image is not None:
 
-        st.text_input(
-            "RTSP URL"
+            st.image(
+                uploaded_image,
+                use_container_width=True
+            )
+
+            if st.button(
+                "Analyze Image",
+                key="analyze_image_btn"
+            ):
+
+                with tempfile.NamedTemporaryFile(
+                    delete=False,
+                    suffix=".jpg"
+                ) as tmp_file:
+
+                    tmp_file.write(
+                        uploaded_image.getbuffer()
+                    )
+
+                    temp_path = tmp_file.name
+
+                result = analyze_image(
+                    temp_path
+                )
+
+                st.session_state[
+                    "analysis_result"
+                ] = result
+
+                st.success(
+                    "Analysis Complete"
+                )
+
+                st.json(result)
+
+    # VIDEO
+    elif source == "Upload Video":
+
+        uploaded_video = st.file_uploader(
+            "Upload Classroom Video",
+            type=["mp4", "avi", "mov"]
         )
 
-    c1, c2 = st.columns(2)
+        if uploaded_video is not None:
 
-    with c1:
+            st.video(uploaded_video)
 
-        st.button(
-            "Start Monitoring"
-        )
+            st.success(
+                "Video uploaded successfully"
+            )
+        st.divider()
 
-    with c2:
+st.subheader("CCTV / RTSP Monitoring")
 
-        st.button(
-            "Stop Monitoring"
-        )
+rtsp_url = st.text_input(
+    "RTSP URL",
+    value="rtsp://username:password@camera_ip:554/stream"
+)
 
-    st.divider()
+start_cctv = st.button(
+    "Start CCTV Feed",
+    key="start_cctv"
+)
+if start_cctv:
 
-    st.subheader(
-        "Image Analysis"
+    cap = cv2.VideoCapture(rtsp_url)
+
+    frame_placeholder = st.empty()
+
+    stop_button = st.button(
+        "Stop CCTV Feed",
+        key="stop_cctv"
     )
 
-    uploaded_image = st.file_uploader(
-        "Upload Classroom Image",
-        type=[
-            "jpg",
-            "jpeg",
-            "png"
-        ]
-    )
+    while cap.isOpened():
 
-    if uploaded_image:
+        ret, frame = cap.read()
 
-        st.image(
-            uploaded_image,
+        if not ret:
+            st.error("Unable to read CCTV stream")
+            break
+
+        rgb = cv2.cvtColor(
+            frame,
+            cv2.COLOR_BGR2RGB
+        )
+
+        frame_placeholder.image(
+            rgb,
+            channels="RGB",
             use_container_width=True
         )
 
-        if st.button(
-            "Analyze Image"
-        ):
+        if stop_button:
+            break
 
-            files = {
+    cap.release()
+    
+    while cap.isOpened():
 
-                "file": (
+        ret, frame = cap.read()
 
-                    uploaded_image.name,
+        if not ret:
+            st.error("Unable to read CCTV stream")
+            break
 
-                    uploaded_image.getvalue(),
+        rgb = cv2.cvtColor(
+            frame,
+            cv2.COLOR_BGR2RGB
+        )
 
-                    uploaded_image.type
+        frame_placeholder.image(
+            rgb,
+            channels="RGB",
+            use_container_width=True
+        )
+
+        if stop_button:
+            break
+
+    cap.release()
+    # CAMERA
+elif source == "Camera Snapshot":
+
+        snapshot = st.camera_input(
+            "Take Photo"
+        )
+
+        if snapshot is not None:
+
+            if st.button(
+                "Analyze Snapshot",
+                key="analyze_snapshot_btn"
+            ):
+
+                with tempfile.NamedTemporaryFile(
+                    delete=False,
+                    suffix=".jpg"
+                ) as tmp_file:
+
+                    tmp_file.write(
+                        snapshot.getbuffer()
+                    )
+
+                    temp_path = tmp_file.name
+
+                result = analyze_image(
+                    temp_path
                 )
-            }
 
-            result = requests.post(
+                st.session_state[
+                    "analysis_result"
+                ] = result
 
-                f"{API_URL}/analyze-image",
-
-                files=files,
-
-                timeout=180
-            ).json()
-
-            st.success(
-                "Analysis Complete"
-            )
-
-            st.json(result)
-
-    st.divider()
-
-    st.subheader(
-        "Camera Snapshot"
-    )
-
-    snapshot = st.camera_input(
-        "Take Photo"
-    )
-
-    if snapshot:
-
-        if st.button(
-            "Analyze Snapshot"
-        ):
-
-            files = {
-
-                "file": (
-
-                    "snapshot.jpg",
-
-                    snapshot.getvalue(),
-
-                    "image/jpeg"
+                st.success(
+                    "Snapshot Analysis Complete"
                 )
-            }
 
-            result = requests.post(
+                st.json(result)
 
-                f"{API_URL}/analyze-image",
-
-                files=files,
-
-                timeout=180
-            ).json()
-
-            st.json(result)
-if history:
-
-    trend_df = pd.DataFrame({
-
-        "Time":
-        history.get(
-            "labels",
-            []
-        ),
-
-        "Attention":
-        history.get(
-            "attention",
-            []
-        ),
-
-        "Engagement":
-        history.get(
-            "engagement",
-            []
-        )
-    })
-
-    if not trend_df.empty:
-
-        st.subheader(
-            "Attention Trend"
-        )
-
-        fig = px.line(
-
-            trend_df,
-
-            x="Time",
-
-            y=[
-                "Attention",
-                "Engagement"
-            ],
-
-            markers=True
-        )
-
-        st.plotly_chart(
-            fig,
-            width="stretch"
-        )
+                st.plotly_chart(
+                    fig,
+                    width="stretch"
+                )
 
 # ==================================================
 # REPORTS TAB
 # ==================================================
-
 with reports_tab:
 
     st.subheader("Reports")
 
-    st.button(
-        "Export PDF"
-    )
+    if not student_df.empty:
 
-    st.button(
-        "Export CSV"
-    )
+        csv = student_df.to_csv(
+            index=False
+        )
 
+        st.download_button(
+            "Download CSV",
+            csv,
+            "student_report.csv",
+            "text/csv"
+        )
+
+        buffer = BytesIO()
+
+        with pd.ExcelWriter(
+            buffer,
+            engine="openpyxl"
+        ) as writer:
+
+            student_df.to_excel(
+                writer,
+                index=False
+            )
+
+        st.download_button(
+            "Download Excel",
+            buffer.getvalue(),
+            "student_report.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    if history:
+
+        trend_df = pd.DataFrame(
+            {
+                "Time": history.get(
+                    "labels",
+                    []
+                ),
+                "Attention": history.get(
+                    "attention",
+                    []
+                ),
+                "Engagement": history.get(
+                    "engagement",
+                    []
+                )
+            }
+        )
+
+        if not trend_df.empty:
+
+            st.subheader(
+                "Attention Trend"
+            )
+
+            fig = px.line(
+                trend_df,
+                x="Time",
+                y=[
+                    "Attention",
+                    "Engagement"
+                ],
+                markers=True
+            )
+
+            st.plotly_chart(
+            fig,
+            use_container_width=True,
+            key="attention_trend_chart"
+            )
     st.info(
         "Historical reports and trend analytics will appear here."
     )

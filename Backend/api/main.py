@@ -1,31 +1,28 @@
 from pathlib import Path
 import json
 import shutil
-import cv2
-
+import tempfile
 
 import numpy as np
-
-from fastapi import (
-    FastAPI,
-    UploadFile,
-    File,
-    Form
-)
+from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.middleware.cors import CORSMiddleware
 
 from Backend.detect import analyze_image
-from threading import Thread
 
-from Backend.services.live_detector import (
-    run_live_detection
+app = FastAPI(
+    title="AI Classroom Monitoring API"
 )
 
 # ==================================================
-# FASTAPI
+# CORS
 # ==================================================
-live_thread = None
-app = FastAPI(
-    title="AI Classroom Monitoring API"
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # ==================================================
@@ -35,160 +32,86 @@ app = FastAPI(
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 RESULTS_DIR = BASE_DIR / "results"
+RESULTS_DIR.mkdir(exist_ok=True)
 
-UPLOAD_IMAGE_DIR = (
-    BASE_DIR /
-    "uploads" /
-    "images"
-)
-
-UPLOAD_VIDEO_DIR = (
-    BASE_DIR /
-    "uploads" /
-    "videos"
-)
-
-UPLOAD_IMAGE_DIR.mkdir(
-    parents=True,
-    exist_ok=True
-)
-
-UPLOAD_VIDEO_DIR.mkdir(
-    parents=True,
-    exist_ok=True
-)
+STUDENTS_FILE = RESULTS_DIR / "students.json"
 
 # ==================================================
 # HELPERS
 # ==================================================
 
-def safe_filename(filename):
-
-    return Path(filename).name
-
-
-def load_score(filename):
-
+def load_json(file_path, default):
     try:
-
-        filepath = (
-            RESULTS_DIR /
-            filename
-        )
-
-        if not filepath.exists():
-
-            return 0.0
-
-        return float(
-            np.load(filepath)[0]
-        )
-
+        with open(file_path, "r") as f:
+            return json.load(f)
     except Exception:
-
-        return 0.0
-
-
-# ==================================================
-# ROOT
-# ==================================================
-
-@app.get("/")
-def home():
-
-    return {
-        "status": "running",
-        "project": "AI Classroom Monitoring"
-    }
+        return default
 
 
-# ==================================================
-# INDIVIDUAL SCORES
-# ==================================================
-
-@app.get("/attention")
-def attention():
-
-    return {
-        "attention_score":
-        load_score(
-            "attention_score.npy"
+def save_json(file_path, data):
+    with open(file_path, "w") as f:
+        json.dump(
+            data,
+            f,
+            indent=4
         )
-    }
 
 
-@app.get("/rppg")
-def rppg():
-
-    return {
-        "alertness_score":
-        load_score(
-            "alertness_score.npy"
+def load_score(file_name, default=0):
+    try:
+        return float(
+            np.load(
+                RESULTS_DIR / file_name
+            )[0]
         )
-    }
-
-
-@app.get("/score")
-def score():
-
-    return {
-        "final_score":
-        load_score(
-            "final_score.npy"
-        )
-    }
-
+    except Exception:
+        return default
 
 # ==================================================
-# DASHBOARD
+# ANALYTICS
 # ==================================================
 
 @app.get("/dashboard")
 def dashboard():
 
+    final_score = load_score(
+        "final_score.npy",
+        0
+    )
+
     attention_score = load_score(
-        "attention_score.npy"
+        "attention_score.npy",
+        0
     )
 
     alertness_score = load_score(
-        "alertness_score.npy"
-    )
-
-    final_score = load_score(
-        "final_score.npy"
+        "alertness_score.npy",
+        50
     )
 
     if final_score >= 80:
-
-        status = "Highly Attentive ✅"
+        status = "Highly Attentive"
 
     elif final_score >= 60:
-
-        status = "Moderately Attentive ⚠️"
+        status = "Moderately Attentive"
 
     else:
-
-        status = "Low Attention ❌"
+        status = "Needs Attention"
 
     return {
-
         "attention_score":
-        attention_score,
+            attention_score,
 
         "alertness_score":
-        alertness_score,
+            alertness_score,
 
         "final_score":
-        final_score,
+            final_score,
 
         "status":
-        status
+            status
     }
 
-
-# ==================================================
-# ANALYTICS
-# ==================================================
 
 @app.get("/analytics")
 def analytics():
@@ -198,384 +121,41 @@ def analytics():
         "analytics.json"
     )
 
-    try:
+    analytics = load_json(
+        analytics_file,
+        {}
+    )
 
-        with open(
-            analytics_file,
-            "r"
-        ) as f:
-
-            data = json.load(f)
-
-        return {
-
-            "attentive_students":
-            data.get(
-                "Attentive",
+    return {
+        "attentive_students":
+            analytics.get(
+                "attentive",
                 0
             ),
 
-            "distracted_students":
-            data.get(
-                "Distracted",
+        "distracted_students":
+            analytics.get(
+                "distracted",
                 0
             ),
 
-            "sleepy_students":
-            data.get(
-                "Sleepy",
+        "sleepy_students":
+            analytics.get(
+                "sleepy",
                 0
             ),
 
-            "phone_usage":
-            data.get(
-                "Phone",
+        "phone_usage":
+            analytics.get(
+                "phone",
                 0
-            )
-        }
+            ),
 
-    except Exception:
-
-        return {
-
-            "attentive_students": 0,
-            "distracted_students": 0,
-            "sleepy_students": 0,
-            "phone_usage": 0
-        }
-
-
-# ==================================================
-# RAW DETECTIONS
-# ==================================================
-
-@app.get("/detections")
-def detections():
-
-    analytics_file = (
-        RESULTS_DIR /
-        "analytics.json"
-    )
-
-    try:
-
-        with open(
-            analytics_file,
-            "r"
-        ) as f:
-
-            return json.load(f)
-
-    except Exception:
-
-        return {}
-
-
-# ==================================================
-# IMAGE UPLOAD
-# ==================================================
-
-@app.post("/upload-image")
-async def upload_image(
-    file: UploadFile = File(...)
-):
-
-    filename = safe_filename(
-        file.filename
-    )
-
-    filepath = (
-        UPLOAD_IMAGE_DIR /
-        filename
-    )
-
-    with open(
-        filepath,
-        "wb"
-    ) as buffer:
-
-        shutil.copyfileobj(
-            file.file,
-            buffer
-        )
-
-    return {
-
-        "status":
-        "success",
-
-        "file":
-        str(filepath)
+        "raw":
+            analytics
     }
 
 
-# ==================================================
-# ANALYZE IMAGE
-# ==================================================
-
-@app.post("/analyze-image")
-async def analyze_image_endpoint(
-    file: UploadFile = File(...)
-):
-
-    try:
-
-        filename = Path(
-            file.filename
-        ).name
-
-        filepath = (
-            UPLOAD_IMAGE_DIR /
-            filename
-        )
-
-        with open(
-            filepath,
-            "wb"
-        ) as buffer:
-
-            shutil.copyfileobj(
-                file.file,
-                buffer
-            )
-
-        result = analyze_image(
-            filepath
-        )
-
-        return {
-            "status": "success",
-            "result": result
-        }
-
-    except Exception as e:
-
-        return {
-            "status": "error",
-            "message": str(e)
-        }
-# ==================================================
-# VIDEO UPLOAD
-# ==================================================
-
-@app.post("/upload-video")
-async def upload_video(
-    file: UploadFile = File(...)
-):
-
-    filename = safe_filename(
-        file.filename
-    )
-
-    filepath = (
-        UPLOAD_VIDEO_DIR /
-        filename
-    )
-
-    with open(
-        filepath,
-        "wb"
-    ) as buffer:
-
-        shutil.copyfileobj(
-            file.file,
-            buffer
-        )
-
-    return {
-
-        "status":
-        "success",
-
-        "file":
-        str(filepath)
-    }
-
-
-# ==================================================
-# WEBCAM CHECK
-# ==================================================
-
-@app.get("/start-webcam")
-def start_webcam():
-
-    camera = None
-
-    try:
-
-        camera = cv2.VideoCapture(0)
-
-        if not camera.isOpened():
-
-            return {
-                "status": "error",
-                "message": "Webcam unavailable"
-            }
-
-        return {
-            "status": "success",
-            "message": "Webcam ready"
-        }
-
-    except Exception as e:
-
-        return {
-            "status": "error",
-            "message": str(e)
-        }
-
-    finally:
-
-        if camera is not None:
-
-            camera.release()
-
-
-# ==================================================
-# TEACHER ALERT
-# ==================================================
-
-@app.get("/teacher-alert")
-def teacher_alert():
-
-    final_score = load_score(
-        "final_score.npy"
-    )
-
-    if final_score >= 80:
-
-        return {
-
-            "score":
-            final_score,
-
-            "status":
-            "Highly Attentive",
-
-            "alert_color":
-            "GREEN"
-        }
-
-    elif final_score >= 60:
-
-        return {
-
-            "score":
-            final_score,
-
-            "status":
-            "Attention Dropping",
-
-            "alert_color":
-            "YELLOW"
-        }
-
-    return {
-
-        "score":
-        final_score,
-
-        "status":
-        "Intervention Required",
-
-        "alert_color":
-        "RED"
-    }
-    
-@app.get("/detections")
-def detections():
-
-    analytics_file = (
-        RESULTS_DIR /
-        "analytics.json"
-    )
-
-    try:
-
-        with open(
-            analytics_file,
-            "r"
-        ) as f:
-
-            return json.load(f)
-
-    except Exception:
-
-        return {}
-@app.post("/start-monitoring")
-def start_monitoring(
-    source: str
-):
-
-    global live_thread
-
-    if live_thread and live_thread.is_alive():
-
-        return {
-            "status": "already_running"
-        }
-
-    live_thread = Thread(
-
-        target=run_live_detection,
-
-        args=(source,)
-    )
-
-    live_thread.daemon = True
-
-    live_thread.start()
-
-    return {
-        "status": "started"
-    }
-    # ==================================================
-# STUDENT METRICS
-# ==================================================
-
-@app.get("/students")
-def students():
-
-    file_path = (
-        RESULTS_DIR /
-        "student_metrics.json"
-    )
-
-    try:
-
-        with open(
-            file_path,
-            "r"
-        ) as f:
-
-            return json.load(f)
-
-    except Exception:
-
-        return {}
-    
-@app.get("/students")
-def students():
-
-    file_path = (
-        RESULTS_DIR /
-        "student_metrics.json"
-    )
-
-    try:
-
-        with open(
-            file_path,
-            "r"
-        ) as f:
-
-            return json.load(f)
-
-    except Exception:
-
-        return {}
-    
-    
 @app.get("/attention-history")
 def attention_history():
 
@@ -584,47 +164,43 @@ def attention_history():
         "attention_history.json"
     )
 
-    try:
-
-        with open(file_path, "r") as f:
-            return json.load(f)
-
-    except Exception:
-
-        return []
-@app.get("//attention-history")
-def history():
-
-    file_path = (
-        RESULTS_DIR /
-        "attention_history.json"
-    )
-
-    try:
-
-        with open(
-            file_path,
-            "r"
-        ) as f:
-
-            return json.load(f)
-
-    except Exception:
-
-        return {
-
+    return load_json(
+        file_path,
+        {
             "labels": [],
-
             "attention": [],
-
             "engagement": [],
-
             "pulse": []
         }
-        
-        
-        
-        
+    )
+
+
+@app.get("/detections")
+def detections():
+
+    analytics_file = (
+        RESULTS_DIR /
+        "analytics.json"
+    )
+
+    return load_json(
+        analytics_file,
+        {}
+    )
+
+# ==================================================
+# STUDENTS
+# ==================================================
+
+@app.get("/students")
+def students():
+
+    return load_json(
+        STUDENTS_FILE,
+        {}
+    )
+
+
 @app.post("/register-student")
 async def register_student(
     student_id: str = Form(...),
@@ -632,20 +208,25 @@ async def register_student(
     file: UploadFile = File(...)
 ):
 
-    student_dir = (
-        BASE_DIR /
-        "student_registry" /
-        student_id
+    students = load_json(
+        STUDENTS_FILE,
+        {}
     )
 
-    student_dir.mkdir(
+    uploads_dir = (
+        BASE_DIR /
+        "uploads" /
+        "students"
+    )
+
+    uploads_dir.mkdir(
         parents=True,
         exist_ok=True
     )
 
     image_path = (
-        student_dir /
-        "profile.jpg"
+        uploads_dir /
+        f"{student_id}_{file.filename}"
     )
 
     with open(
@@ -658,28 +239,125 @@ async def register_student(
             buffer
         )
 
-    metadata = {
+    students[student_id] = {
 
-        "student_id": student_id,
+        "name":
+            student_name,
 
-        "student_name": student_name,
+        "image":
+            str(
+                image_path
+            ),
 
-        "image": "profile.jpg"
+        "attention_rate":
+            0,
+
+        "status":
+            "Registered"
     }
 
-    with open(
-        student_dir /
-        "student.json",
-        "w"
-    ) as f:
-
-        json.dump(
-            metadata,
-            f,
-            indent=4
-        )
+    save_json(
+        STUDENTS_FILE,
+        students
+    )
 
     return {
-        "status": "success",
-        "student_id": student_id
+        "message":
+            "Student registered successfully",
+
+        "student_id":
+            student_id,
+
+        "student_name":
+            student_name
+    }
+
+# ==================================================
+# IMAGE ANALYSIS
+# ==================================================
+
+@app.post("/analyze-image")
+async def analyze_image_api(
+    file: UploadFile = File(...)
+):
+    suffix = Path(
+        file.filename
+    ).suffix
+
+    with tempfile.NamedTemporaryFile(
+        delete=False,
+        suffix=suffix
+    ) as temp:
+
+        content = await file.read()
+
+        temp.write(content)
+
+        temp_path = temp.name
+
+    result = analyze_image(
+        temp_path
+    )
+
+    return result
+
+
+# ==================================================
+# TEACHER ALERT
+# ==================================================
+
+@app.get("/teacher-alert")
+def teacher_alert():
+
+    final_score = load_score(
+        "final_score.npy",
+        0
+    )
+
+    if final_score >= 80:
+
+        return {
+            "alert_color":
+                "GREEN",
+
+            "score":
+                final_score,
+
+            "status":
+                "Classroom Performing Well"
+        }
+
+    elif final_score >= 60:
+
+        return {
+            "alert_color":
+                "YELLOW",
+
+            "score":
+                final_score,
+
+            "status":
+                "Moderate Attention"
+        }
+
+    else:
+
+        return {
+            "alert_color":
+                "RED",
+
+            "score":
+                final_score,
+
+            "status":
+                "Immediate Intervention Recommended"
+        }
+
+
+@app.get("/")
+def home():
+
+    return {
+        "message":
+            "AI Classroom Monitoring API Running"
     }
