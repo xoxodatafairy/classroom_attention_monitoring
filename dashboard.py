@@ -2,18 +2,40 @@ import os
 import json
 import tempfile
 from io import BytesIO
-
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from streamlit_webrtc import webrtc_streamer
-from Backend.detect import analyze_image
+from Backend.detect import (
+    analyze_image,
+    analyze_video
+)
 import cv2
 import threading
 import streamlit as st
 # API_URL = "https://your-api.onrender.com"
 
+def load_bpm():
+    try:
+        return float(
+            np.load(
+                "Backend/results/bpm.npy"
+            )[0]
+        )
+    except:
+        return None
 
+
+def load_alertness():
+    try:
+        return float(
+            np.load(
+                "Backend/results/alertness_score.npy"
+            )[0]
+        )
+    except:
+        return None
 
 # ==================================================
 # CONFIG
@@ -77,7 +99,20 @@ else:
 
 # Students
 students_file = "Backend/results/students.json"
+teacher_file = "Backend/results/teacher.json"
 
+if (
+    os.path.exists(teacher_file)
+    and os.path.getsize(teacher_file) > 0
+):
+    try:
+        with open(teacher_file, "r") as f:
+            teacher = json.load(f)
+    except json.JSONDecodeError:
+        teacher = {}
+else:
+    teacher = {}
+    
 if os.path.exists(students_file):
     with open(students_file, "r") as f:
         students = json.load(f)
@@ -132,12 +167,12 @@ if st.button(
 # ==================================================
 # TABS
 # ==================================================
-
-dashboard_tab, students_tab, monitoring_tab, reports_tab, register_tab = st.tabs(
+dashboard_tab, students_tab, monitoring_tab, teacher_tab, reports_tab, register_tab = st.tabs(
     [
         "Dashboard",
         "Students",
         "Monitoring",
+        "Teacher",
         "Reports",
         "Register Student"
     ]
@@ -145,33 +180,6 @@ dashboard_tab, students_tab, monitoring_tab, reports_tab, register_tab = st.tabs
 
 with dashboard_tab:
 
-    col1, col2, col3, col4 = st.columns(4)
-
-    pulse_data = history.get("pulse", [0])
-
-    current_pulse = (
-        pulse_data[-1]
-        if pulse_data
-        else 0
-    )
-    col1.metric(
-    "Attention Score",
-    f"{dashboard.get('attention_score',0):.2f}%"
-)
-
-    col2.metric(
-    "Alertness Score",
-    f"{dashboard.get('alertness_score',0):.2f}%"
-)
-
-    col3.metric(
-    "Final Score",
-    f"{dashboard.get('final_score',0):.2f}%"
-)
-    col4.metric(
-    "Pulse (BPM)",
-    current_pulse
-)
 
     st.subheader("Classroom Status")
 
@@ -215,6 +223,63 @@ with dashboard_tab:
     use_container_width=True,
     key="dashboard_gauge"
 )
+    
+    bpm = load_bpm()
+rppg_alertness = load_alertness()
+attention_score = dashboard.get(
+    "attention_score",
+    0
+)
+
+alertness_score = dashboard.get(
+    "alertness_score",
+    0
+)
+
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    st.metric(
+        "Attention Score",
+        f"{attention_score:.2f}%"
+    )
+
+with col2:
+    st.metric(
+        "Alertness Score",
+        f"{alertness_score:.2f}%"
+    )
+
+with col3:
+    st.metric(
+        "Heart Rate",
+        f"{bpm:.0f} BPM"
+        if bpm
+        else "N/A"
+    )
+
+with col4:
+    st.metric(
+        "rPPG Alertness",
+        f"{rppg_alertness:.1f}%"
+        if rppg_alertness
+        else "N/A"
+    )
+
+if bpm is not None:
+
+    if bpm < 60:
+        pulse_status = "Low Pulse"
+
+    elif bpm <= 100:
+        pulse_status = "Normal Pulse"
+
+    else:
+        pulse_status = "Elevated Pulse"
+
+    st.info(
+        f"Pulse Status: {pulse_status} ({bpm:.0f} BPM)"
+    )
 # Normalize analytics keys
 analytics = {
     str(k).lower(): v
@@ -253,6 +318,31 @@ st.plotly_chart(
     fig,
     use_container_width=True,
     key="behavior_chart"
+)
+
+st.divider()
+
+st.subheader("🧪 Pulse Debug")
+
+st.write("BPM:", bpm)
+
+st.write(
+    "rPPG Alertness:",
+    rppg_alertness
+)
+
+st.write(
+    "Pulse File Exists:",
+    os.path.exists(
+        "Backend/results/bpm.npy"
+    )
+)
+
+st.write(
+    "Alertness File Exists:",
+    os.path.exists(
+        "Backend/results/alertness_score.npy"
+    )
 )
 # STUDENTS TAB
 # ==================================================
@@ -381,14 +471,89 @@ for student_id, data in students.items():
         st.error(
             f"{data.get('name')} - {pulse} BPM"
         )
+signal_file = "Backend/results/green_signal.npy"
+
+if os.path.exists(signal_file):
+
+    signal = np.load(signal_file)
+
+    pulse_df = pd.DataFrame({
+        "Frame": range(len(signal)),
+        "Pulse Signal": signal
+    })
+
+    st.subheader(
+        "rPPG Pulse Waveform"
+    )
+
+    fig = px.line(
+        pulse_df,
+        x="Frame",
+        y="Pulse Signal",
+        title="Extracted Pulse Signal"
+    )
+
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        key="pulse_waveform"
+    )
+
 else:
 
         st.info(
             "No students registered yet."
         )
         
-        
-         
+st.subheader("❤️ Physiological Monitoring")
+
+bpm = load_bpm()
+rppg_alertness = load_alertness()
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.metric(
+        "Heart Rate",
+        f"{bpm:.0f} BPM" if bpm else "N/A"
+    )
+
+with col2:
+    st.metric(
+        "Physiological Alertness",
+        f"{rppg_alertness:.1f}%"
+        if rppg_alertness
+        else "N/A"
+    )
+teacher_image = (
+    "Backend/data/teacher/teacher.jpg"
+)
+
+if os.path.exists(
+    teacher_image
+):
+    st.image(
+        teacher_image,
+        width=250
+    )
+teacher_score = round(
+    (
+        final_score * 0.7
+    ) +
+    (
+        dashboard.get(
+            "attention_score",
+            0
+        ) * 0.3
+    ),
+    2
+)
+
+st.metric(
+    "Teaching Effectiveness",
+    f"{teacher_score}%"
+)
+
 # ==================================================
 # register TAB
 # ==================================================
@@ -423,7 +588,14 @@ with register_tab:
             )
 
             students_file = "Backend/results/students.json"
+            teacher_file = "Backend/results/teacher.json"
 
+            if os.path.exists(teacher_file):
+                with open(teacher_file, "r") as f:
+                    teacher = json.load(f)
+            else:
+                teacher = {}
+            
             if (
                 os.path.exists(students_file)
                 and os.path.getsize(students_file) > 0
@@ -440,11 +612,11 @@ with register_tab:
             "name": student_name,
             "photo": f"{student_id}.jpg",
             "attention_rate": 0,
-            "pulse": 0,
-            "status": "Unknown",
-            "sleepy_count": 0,
-            "distracted_count": 0
+            "pulse": 72,
+            "rppg_alertness": 88,
+            "status": "Normal"
 }
+
 
             with open(
                 students_file,
@@ -554,7 +726,6 @@ with monitoring_tab:
     # ===============================
     # VIDEO
     # ===============================
-
     elif source == "Upload Video":
 
         uploaded_video = st.file_uploader(
@@ -566,6 +737,36 @@ with monitoring_tab:
         if uploaded_video is not None:
 
             st.video(uploaded_video)
+
+            if st.button(
+                "Analyze Video",
+                key="analyze_video"
+            ):
+
+                with tempfile.NamedTemporaryFile(
+                    delete=False,
+                    suffix=".mp4"
+                ) as tmp_video:
+
+                    tmp_video.write(
+                        uploaded_video.read()
+                    )
+
+                    video_path = tmp_video.name
+
+                result = analyze_video(
+                    video_path
+                )
+
+                st.session_state[
+                    "analysis_result"
+                ] = result
+
+                st.success(
+                    "Video Analysis Complete"
+                )
+
+                st.rerun()
 
     # ===============================
     # CAMERA
@@ -655,6 +856,74 @@ with monitoring_tab:
         cap.release()
 
 # ==================================================
+# teacher TAB
+# ==================================================
+with teacher_tab:
+
+    st.subheader("👨‍🏫 Teacher Analytics")
+
+    teacher_name = st.text_input(
+        "Teacher Name",
+        key="teacher_name"
+    )
+
+    teacher_photo = st.file_uploader(
+        "Teacher Photo",
+        type=["jpg", "jpeg", "png"],
+        key="teacher_photo"
+    )
+
+    if st.button(
+        "Register Teacher",
+        key="register_teacher"
+    ):
+        ...
+        ...
+
+    if teacher:
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            st.metric(
+                "Teacher Presence",
+                teacher.get("presence", 0)
+            )
+
+        with col2:
+            st.metric(
+                "Class Engagement",
+                final_score
+            )
+
+        with col3:
+            st.metric(
+                "Heart Rate",
+                teacher.get("heart_rate", 0)
+            )
+
+        with col4:
+            st.metric(
+                "Status",
+                teacher.get("status", "Unknown")
+            )
+
+    st.subheader(
+        "AI Teaching Recommendations"
+    )
+    if final_score < 60:
+        st.error(
+            "Students are disengaged. Increase interaction."
+        )
+    elif final_score < 80:
+        st.warning(
+            "Moderate engagement detected."
+        )
+    else:
+        st.success(
+            "Excellent classroom engagement."
+        )
+# ==================================================
 # REPORTS TAB
 # ==================================================
 with reports_tab:
@@ -736,3 +1005,5 @@ with reports_tab:
     st.info(
         "Historical reports and trend analytics will appear here."
     )
+    
+    

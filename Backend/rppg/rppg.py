@@ -32,7 +32,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from face_detector import (
+from .face_detector import (
     detect_faces,
     extract_forehead
 )

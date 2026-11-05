@@ -1,245 +1,198 @@
-import json
 import sys
-from datetime import datetime
 from pathlib import Path
-
-import numpy as np
-from ultralytics import YOLO
-
-# ==================================================
-# PATHS
-# ==================================================
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
+import json
+from datetime import datetime
+from pathlib import Path
+import cv2
+import numpy as np
+from ultralytics import YOLO
+from Backend.rppg.rppg import process_video
+from Backend.scoring.scoring import (
+    calculate_attention_score
+)
 
-from Backend.scoring.scoring import calculate_attention_score
+from Backend.fusion.fusion import (
+    calculate_final_score,
+    get_classroom_status
+)
+
+# ==================================================
+# PATHS
+# ==================================================
 
 BASE_DIR = Path(__file__).resolve().parent
 
-MODEL_PATH = BASE_DIR / "models" / "best.pt"
+MODEL_PATH = (
+    BASE_DIR /
+    "Models" /
+    "best.pt"
+)
 
-RESULTS_DIR = BASE_DIR / "results"
-RESULTS_DIR.mkdir(exist_ok=True)
+RESULTS_DIR = (
+    BASE_DIR /
+    "results"
+)
 
-ANALYTICS_FILE = RESULTS_DIR / "analytics.json"
-HISTORY_FILE = RESULTS_DIR / "attention_history.json"
-ALERTNESS_FILE = RESULTS_DIR / "alertness_score.npy"
-PULSE_FILE = RESULTS_DIR / "pulse.npy"
-
-# ==================================================
-# MODEL LOADING
-# ==================================================
-
-_MODEL = None
-
-
-def get_model():
-    global _MODEL
-
-    if _MODEL is None:
-        if not MODEL_PATH.exists():
-            raise FileNotFoundError(
-                f"Model not found: {MODEL_PATH}"
-            )
-
-        _MODEL = YOLO(str(MODEL_PATH))
-
-    return _MODEL
-
+RESULTS_DIR.mkdir(
+    exist_ok=True
+)
 
 # ==================================================
-# HELPERS
+# LOAD YOLO MODEL ONCE
 # ==================================================
 
-def safe_load_npy(file_path, default=0.0):
-    try:
-        return float(np.load(file_path)[0])
-    except Exception:
-        return default
-
-
-def get_alertness_score():
-    return safe_load_npy(ALERTNESS_FILE, 50.0)
-
-
-def get_pulse():
-    return safe_load_npy(PULSE_FILE, 0.0)
-
-
-def get_status(final_score):
-    if final_score >= 80:
-        return "Highly Attentive"
-
-    if final_score >= 60:
-        return "Moderately Attentive"
-
-    return "Needs Attention"
-
+model = YOLO(
+    str(MODEL_PATH)
+)
 
 # ==================================================
-# HISTORY
-# ==================================================
-
-def update_history(
-    attention_score,
-    final_score,
-    pulse
-):
-    history = {
-        "labels": [],
-        "attention": [],
-        "engagement": [],
-        "pulse": []
-    }
-
-    if HISTORY_FILE.exists():
-        try:
-            with open(HISTORY_FILE, "r") as f:
-                history = json.load(f)
-        except Exception:
-            pass
-
-    history["labels"].append(
-        datetime.now().strftime("%H:%M")
-    )
-
-    history["attention"].append(
-        round(attention_score, 2)
-    )
-
-    history["engagement"].append(
-        round(final_score, 2)
-    )
-
-    history["pulse"].append(
-        round(pulse, 2)
-    )
-
-    max_items = 100
-
-    for key in history:
-        history[key] = history[key][-max_items:]
-
-    with open(HISTORY_FILE, "w") as f:
-        json.dump(
-            history,
-            f,
-            indent=4
-        )
-
-
-# ==================================================
-# ANALYTICS
-# ==================================================
-
-def save_analytics(class_counts):
-    with open(
-        ANALYTICS_FILE,
-        "w"
-    ) as f:
-        json.dump(
-            class_counts,
-            f,
-            indent=4
-        )
-
-
-# ==================================================
-# IMAGE ANALYSIS
+# ANALYZE IMAGE
 # ==================================================
 
 def analyze_image(image_path):
-    """
-    Main detection pipeline
-    """
-
-    model = get_model()
 
     results = model.predict(
         source=str(image_path),
         conf=0.30,
-        save=True,
-        verbose=False
+        save=True
     )
 
     class_counts = {}
 
     for result in results:
 
-        if not hasattr(result, "boxes"):
-            continue
-
         for box in result.boxes:
 
-            class_id = int(box.cls[0])
-
-            class_name = model.names.get(
-                class_id,
-                str(class_id)
+            class_id = int(
+                box.cls[0]
             )
 
-            class_counts[class_name] = (
+            class_name = model.names[
+                class_id
+            ]
+
+            class_counts[
+                class_name
+            ] = (
                 class_counts.get(
                     class_name,
                     0
                 ) + 1
             )
+def analyze_video(video_path):
 
-    # ==================================================
-    # ATTENTION
-    # ==================================================
+    cap = cv2.VideoCapture(video_path)
 
-    attention_score = calculate_attention_score(
-        class_counts
-    )
+    aggregated_counts = {}
 
-    attention_score = float(
-        max(
-            0,
-            min(
-                100,
-                attention_score
-            )
+    frame_count = 0
+
+    while cap.isOpened():
+
+        ret, frame = cap.read()
+
+        if not ret:
+            break
+
+        frame_count += 1
+
+        if frame_count % 30 != 0:
+            continue
+
+        results = model.predict(
+            source=frame,
+            conf=0.30,
+            verbose=False
         )
-    )
 
-    # ==================================================
-    # ALERTNESS
-    # ==================================================
+        for result in results:
 
-    alertness_score = get_alertness_score()
+            for box in result.boxes:
 
-    # ==================================================
-    # PULSE
-    # ==================================================
+                class_id = int(box.cls[0])
 
-    pulse = get_pulse()
+                class_name = model.names[class_id]
 
-    # ==================================================
-    # FINAL SCORE
-    # ==================================================
+                aggregated_counts[class_name] = (
+                    aggregated_counts.get(
+                        class_name,
+                        0
+                    ) + 1
+                )
+
+    cap.release()
+    # ==========================================
+# rPPG PROCESSING
+# ==========================================
+
+    try:
+
+        process_video(video_path)
+
+        print("✅ rPPG Processing Complete")
+
+    except Exception as e:
+
+        print(
+            f"❌ rPPG Error: {e}"
+        )
+
+        attention_score = calculate_attention_score(
+            aggregated_counts
+        )
+
+    try:
+        alertness_score = float(
+            np.load(
+                RESULTS_DIR /
+                "alertness_score.npy"
+            )[0]
+        )
+    except:
+        alertness_score = 50.0
 
     final_score = round(
-        (
-            attention_score * 0.7
-        )
+        (attention_score * 0.7)
         +
-        (
-            alertness_score * 0.3
-        ),
+        (alertness_score * 0.3),
         2
     )
 
-    status = get_status(
+    status = get_classroom_status(
         final_score
     )
 
+    return {
+        "counts": aggregated_counts,
+        "attention_score": round(attention_score, 2),
+        "alertness_score": round(alertness_score, 2),
+        "final_score": round(final_score, 2),
+        "status": status
+    }
+
     # ==================================================
-    # SAVE
+    # ATTENTION SCORE
     # ==================================================
+
+    attention_score = (
+        calculate_attention_score(
+            class_counts
+        )
+    )
+    
+    
+    attention_score = max(
+    0,
+    min(
+        100,
+        attention_score
+    )
+)
 
     np.save(
         RESULTS_DIR /
@@ -249,93 +202,207 @@ def analyze_image(image_path):
         )
     )
 
+    # ==================================================
+    # SAVE ANALYTICS
+    # ==================================================
+
+    analytics_file = (
+        RESULTS_DIR /
+        "analytics.json"
+    )
+
+    with open(
+        analytics_file,
+        "w"
+    ) as f:
+
+        json.dump(
+            class_counts,
+            f,
+            indent=4
+        )
+
+    # ==================================================
+    # LOAD ALERTNESS SCORE
+    # ==================================================
+
+    alertness_file = (
+        RESULTS_DIR /
+        "alertness_score.npy"
+    )
+
+    try:
+
+        alertness_score = float(
+            np.load(
+                alertness_file
+            )[0]
+        )
+
+    except Exception:
+
+        alertness_score = 50.0
+
+    # ==================================================
+    # FINAL SCORE
+    # ==================================================
+
+    final_score = round(
+    (
+        attention_score * 0.7
+    )
+    +
+    (
+        alertness_score * 0.3
+    ),
+    2
+)
+
+    final_score = max(
+    0,
+    min(
+        100,
+        final_score
+    )
+)
+
     np.save(
+
         RESULTS_DIR /
         "final_score.npy",
+
         np.array(
             [final_score]
         )
     )
+    try:
 
-    save_analytics(
-        class_counts
+        alertness_score = float(
+            np.load(
+                RESULTS_DIR /
+                "alertness_score.npy"
+            )[0]
+        )
+
+    except Exception:
+
+        alertness_score = 50.0
+
+    final_score = round(
+        (attention_score * 0.7)
+        +
+        (alertness_score * 0.3),
+        2
     )
 
-    update_history(
-        attention_score,
-        final_score,
-        pulse
+    status = get_classroom_status(
+        final_score
     )
 
-    total_detected = sum(
-        class_counts.values()
-    )
-
-    response = {
-        "timestamp":
-            datetime.now().isoformat(),
-
-        "counts":
-            class_counts,
-
-        "total_detected":
-            total_detected,
-
-        "attention_score":
-            round(
-                attention_score,
-                2
-            ),
-
-        "alertness_score":
-            round(
-                alertness_score,
-                2
-            ),
-
-        "pulse":
-            round(
-                pulse,
-                2
-            ),
-
-        "final_score":
-            round(
-                final_score,
-                2
-            ),
-
-        "status":
-            status
+    return {
+        "counts": aggregated_counts,
+        "attention_score": round(
+            attention_score,
+            2
+        ),
+        "alertness_score": round(
+            alertness_score,
+            2
+        ),
+        "final_score": final_score,
+        "status": status
     }
 
-    print(
-        f"[INFO] "
-        f"Attention={attention_score:.2f} | "
-        f"Alertness={alertness_score:.2f} | "
-        f"Pulse={pulse:.2f} | "
-        f"Final={final_score:.2f}"
+    # ==================================================
+    # ATTENTION HISTORY
+    # ==================================================
+
+    history_file = (
+        RESULTS_DIR /
+        "attention_history.json"
     )
 
-    return response
+    try:
 
+        with open(
+            history_file,
+            "r"
+        ) as f:
 
-# ==================================================
-# TEST
-# ==================================================
+            history = json.load(f)
 
-if __name__ == "__main__":
-    test_image = input(
-        "Image path: "
-    )
+    except Exception:
 
-    result = analyze_image(
-        test_image
-    )
+        history = {
 
-    print(
-        json.dumps(
-            result,
-            indent=4
+            "labels": [],
+
+            "attention": [],
+
+            "engagement": [],
+
+            "pulse": []
+        }
+
+    history["labels"].append(
+        datetime.now().strftime(
+            "%H:%M"
         )
     )
+
+    history["attention"].append(
+        round(
+            float(
+                attention_score
+            ),
+            2
+        )
+    )
+
+    history["engagement"].append(
+        round(
+            float(
+                final_score
+            ),
+            2
+        )
+    )
+
+    # Placeholder until rPPG is added
+    history["pulse"].append(
+        0
+    )
+
+    # Keep only latest 100 records
+
+    for key in history:
+
+        history[key] = history[
+            key
+        ][-100:]
+
+    with open(
+        history_file,
+        "w"
+    ) as f:
+
+        json.dump(
+            history,
+            f,
+            indent=4
+        )
+        
+
+    # ==================================================
+    # RETURN RESULTS
+    # ==================================================
+
+    status = get_classroom_status(final_score)
+
+    return {
+    "counts": class_counts,
+    "attention_score": round(attention_score, 2),
+    "alertness_score": round(alertness_score, 2),
+    "final_score": round(final_score, 2),
+    "status": status
+}
