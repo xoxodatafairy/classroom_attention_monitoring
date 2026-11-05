@@ -727,47 +727,65 @@ with monitoring_tab:
     # VIDEO
     # ===============================
     elif source == "Upload Video":
-
         uploaded_video = st.file_uploader(
-            "Upload Classroom Video",
-            type=["mp4", "avi", "mov"],
-            key="video_upload"
+        "Upload Classroom Video",
+        type=["mp4", "avi", "mov"],
+        key="video_upload"
+    )
+
+    if uploaded_video is not None:
+        video_size_mb = (
+            uploaded_video.size /
+            (1024 * 1024)
         )
 
-        if uploaded_video is not None:
+        st.info(
+            f"Video Size: {video_size_mb:.2f} MB"
+        )
 
-            st.video(uploaded_video)
+        if video_size_mb > 20:
 
-            if st.button(
-                "Analyze Video",
-                key="analyze_video"
+            st.error(
+                "Please upload a video smaller than 20MB."
+            )
+
+            st.stop()
+
+        st.video(uploaded_video)
+
+        if st.button(
+            "Analyze Video",
+            key="analyze_video"
+        ):
+
+            with tempfile.NamedTemporaryFile(
+                delete=False,
+                suffix=".mp4"
+            ) as tmp_video:
+
+                tmp_video.write(
+                    uploaded_video.read()
+                )
+
+                video_path = tmp_video.name
+
+            with st.spinner(
+                "Analyzing video..."
             ):
-
-                with tempfile.NamedTemporaryFile(
-                    delete=False,
-                    suffix=".mp4"
-                ) as tmp_video:
-
-                    tmp_video.write(
-                        uploaded_video.read()
-                    )
-
-                    video_path = tmp_video.name
 
                 result = analyze_video(
                     video_path
                 )
 
-                st.session_state[
-                    "analysis_result"
-                ] = result
+            st.session_state[
+                "analysis_result"
+            ] = result
 
-                st.success(
-                    "Video Analysis Complete"
-                )
+            st.success(
+                "Video Analysis Complete"
+            )
 
-                st.rerun()
-
+            st.rerun()
     # ===============================
     # CAMERA
     # ===============================

@@ -40,8 +40,16 @@ from .face_detector import (
 # ==================================================
 # PROJECT PATHS
 # ==================================================
-
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+RESULTS_DIR = (
+    BASE_DIR.parent /
+    "results"
+)
+
+RESULTS_DIR.mkdir(
+    exist_ok=True
+)
 
 VIDEO_PATH = (
     BASE_DIR /
@@ -286,13 +294,15 @@ def process_video(video_path):
     # ==================================================
 
     np.save(
-        "green_signal.npy",
-        np.array(smoothed_green)
+    RESULTS_DIR /
+    "green_signal.npy",
+    np.array(smoothed_green)
     )
 
     np.save(
-        "video_fps.npy",
-        np.array([fps])
+    RESULTS_DIR /
+    "video_fps.npy",
+    np.array([fps])
     )
 
     print("\n✅ green_signal.npy saved")
