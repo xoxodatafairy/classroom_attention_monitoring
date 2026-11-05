@@ -11,7 +11,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from ultralytics import YOLO
-from Backend.rppg.rppg import process_video
+
 from Backend.scoring.scoring import (
     calculate_attention_score
 )
