@@ -46,9 +46,6 @@ def detect_faces(frame):
 # ==================================================
 # EXTRACT FOREHEAD ROI
 # ==================================================
-
-def extract_forehead(frame, face):
-
     """
     Extract the forehead region from a detected face.
 
@@ -66,16 +63,17 @@ def extract_forehead(frame, face):
         Forehead region of interest
     """
 
+def extract_forehead(frame, face):
+
     x, y, w, h = face
 
-    # Top-middle portion of the face
     forehead_x = x + int(w * 0.25)
     forehead_y = y + int(h * 0.10)
 
     forehead_w = int(w * 0.50)
     forehead_h = int(h * 0.20)
 
-    forehead = frame[
+    return frame[
         forehead_y:forehead_y + forehead_h,
         forehead_x:forehead_x + forehead_w
     ]

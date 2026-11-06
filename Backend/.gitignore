@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual env
+venv/
+
+# YOLO outputs
+runs/
+
+# macOS
+.DS_Store
+
+# Runtime data
+Backend/results/*.json
+Backend/results/*.npy
+
+# Root generated files
+*.npy
+
+# Uploaded files
+Backend/uploads/
+
+# Videos
+*.mp4
+*.avi
+*.mov

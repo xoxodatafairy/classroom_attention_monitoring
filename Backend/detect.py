@@ -35,8 +35,8 @@ MODEL_PATH = (
 RESULTS_DIR = BASE_DIR / "results"
 RESULTS_DIR.mkdir(exist_ok=True)
 
-print("MODEL_PATH:", MODEL_PATH)
-print("EXISTS:", MODEL_PATH.exists())
+print("MODEL_PATH =", MODEL_PATH)
+print("EXISTS =", MODEL_PATH.exists())
 # ==================================================
 # LOAD MODEL
 # ==================================================
@@ -122,12 +122,12 @@ def analyze_video(video_path):
         frame_count += 1
 
         # Analyze every 30th frame
-        if frame_count % 30 != 0:
+        if frame_count % 90 != 0:
             continue
 
         results = model.predict(
             source=frame,
-            conf=0.30,
+            conf=0.90,
             verbose=False
         )
 
@@ -187,20 +187,6 @@ def analyze_video(video_path):
     status = get_classroom_status(
         final_score
     )
-
-    return {
-        "counts": aggregated_counts,
-        "attention_score": round(
-            attention_score,
-            2
-        ),
-        "alertness_score": round(
-            alertness_score,
-            2
-        ),
-        "final_score": final_score,
-        "status": status
-    }
     # ==========================================
 # rPPG PROCESSING
 # ==========================================
@@ -249,235 +235,3 @@ def analyze_video(video_path):
         "final_score": round(final_score, 2),
         "status": status
     }
-
-    # ==================================================
-    # ATTENTION SCORE
-    # ==================================================
-
-    attention_score = (
-        calculate_attention_score(
-            class_counts
-        )
-    )
-    
-    
-    attention_score = max(
-    0,
-    min(
-        100,
-        attention_score
-    )
-)
-
-    np.save(
-        RESULTS_DIR /
-        "attention_score.npy",
-        np.array(
-            [attention_score]
-        )
-    )
-
-    # ==================================================
-    # SAVE ANALYTICS
-    # ==================================================
-
-    analytics_file = (
-        RESULTS_DIR /
-        "analytics.json"
-    )
-
-    with open(
-        analytics_file,
-        "w"
-    ) as f:
-
-        json.dump(
-            class_counts,
-            f,
-            indent=4
-        )
-
-    # ==================================================
-    # LOAD ALERTNESS SCORE
-    # ==================================================
-
-    alertness_file = (
-        RESULTS_DIR /
-        "alertness_score.npy"
-    )
-
-    try:
-
-        alertness_score = float(
-            np.load(
-                alertness_file
-            )[0]
-        )
-
-    except Exception:
-
-        alertness_score = 50.0
-
-    # ==================================================
-    # FINAL SCORE
-    # ==================================================
-
-    final_score = round(
-    (
-        attention_score * 0.7
-    )
-    +
-    (
-        alertness_score * 0.3
-    ),
-    2
-)
-
-    final_score = max(
-    0,
-    min(
-        100,
-        final_score
-    )
-)
-
-    np.save(
-
-        RESULTS_DIR /
-        "final_score.npy",
-
-        np.array(
-            [final_score]
-        )
-    )
-    try:
-
-        alertness_score = float(
-            np.load(
-                RESULTS_DIR /
-                "alertness_score.npy"
-            )[0]
-        )
-
-    except Exception:
-
-        alertness_score = 50.0
-
-    final_score = round(
-        (attention_score * 0.7)
-        +
-        (alertness_score * 0.3),
-        2
-    )
-
-    status = get_classroom_status(
-        final_score
-    )
-
-    return {
-        "counts": aggregated_counts,
-        "attention_score": round(
-            attention_score,
-            2
-        ),
-        "alertness_score": round(
-            alertness_score,
-            2
-        ),
-        "final_score": final_score,
-        "status": status
-    }
-
-    # ==================================================
-    # ATTENTION HISTORY
-    # ==================================================
-
-    history_file = (
-        RESULTS_DIR /
-        "attention_history.json"
-    )
-
-    try:
-
-        with open(
-            history_file,
-            "r"
-        ) as f:
-
-            history = json.load(f)
-
-    except Exception:
-
-        history = {
-
-            "labels": [],
-
-            "attention": [],
-
-            "engagement": [],
-
-            "pulse": []
-        }
-
-    history["labels"].append(
-        datetime.now().strftime(
-            "%H:%M"
-        )
-    )
-
-    history["attention"].append(
-        round(
-            float(
-                attention_score
-            ),
-            2
-        )
-    )
-
-    history["engagement"].append(
-        round(
-            float(
-                final_score
-            ),
-            2
-        )
-    )
-
-    # Placeholder until rPPG is added
-    history["pulse"].append(
-        0
-    )
-
-    # Keep only latest 100 records
-
-    for key in history:
-
-        history[key] = history[
-            key
-        ][-100:]
-
-    with open(
-        history_file,
-        "w"
-    ) as f:
-
-        json.dump(
-            history,
-            f,
-            indent=4
-        )
-        
-
-    # ==================================================
-    # RETURN RESULTS
-    # ==================================================
-
-    status = get_classroom_status(final_score)
-
-    return {
-    "counts": class_counts,
-    "attention_score": round(attention_score, 2),
-    "alertness_score": round(alertness_score, 2),
-    "final_score": round(final_score, 2),
-    "status": status
-}

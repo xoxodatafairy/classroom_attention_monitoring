@@ -12,6 +12,14 @@ Purpose
 7. Save alertness score
 8. Plot pulse waveform
 
+Notes
+-----
+- Nothing runs on import any more. Call analyze_signal() with a signal
+  (e.g. the "green" list returned by rppg.process_video), or
+  analyze_saved_signal() to read the .npy files.
+- plot_waveform() returns a matplotlib Figure. Use st.pyplot(fig) in
+  Streamlit. plt.show() is only called when run from the terminal.
+
 Author
 ------
 Shalom Arogundade
@@ -28,12 +36,17 @@ AI Classroom Attention Monitoring System
 from pathlib import Path
 
 import numpy as np
-import matplotlib.pyplot as plt
 
-from alertness import (
-    calculate_alertness_score,
-    get_alertness_status
-)
+try:
+    from .alertness import (
+        calculate_alertness_score,
+        get_alertness_status
+    )
+except ImportError:  # running as a plain script
+    from alertness import (
+        calculate_alertness_score,
+        get_alertness_status
+    )
 
 # ==================================================
 # PROJECT PATHS
@@ -41,38 +54,9 @@ from alertness import (
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-RESULTS_DIR = BASE_DIR / "results"
+# Same folder that rppg.py saves to
+RESULTS_DIR = BASE_DIR.parent / "results"
 
-RESULTS_DIR.mkdir(exist_ok=True)
-
-# ==================================================
-# LOAD SIGNAL FILES
-# ==================================================
-
-print("\n========== LOADING SIGNAL ==========")
-
-signal = np.load("green_signal.npy")
-
-fps = float(
-    np.load("video_fps.npy")[0]
-)
-
-print("Samples:", len(signal))
-print("Video FPS:", fps)
-
-# ==================================================
-# NORMALIZE SIGNAL
-# ==================================================
-
-signal = signal - np.mean(signal)
-
-std = np.std(signal)
-
-if std > 0:
-
-    signal = signal / std
-
-print("✅ Signal Normalized")
 
 # ==================================================
 # MOVING AVERAGE FILTER
@@ -84,215 +68,245 @@ def moving_average(data, window=7):
 
     for i in range(len(data)):
 
-        start = max(
-            0,
-            i - window + 1
-        )
-
+        start = max(0, i - window + 1)
         values = data[start:i + 1]
 
-        smoothed.append(
-            sum(values) / len(values)
-        )
+        smoothed.append(sum(values) / len(values))
 
     return np.array(smoothed)
 
+
 # ==================================================
-# SMOOTH SIGNAL
+# NORMALIZE
 # ==================================================
 
-signal = moving_average(
-    signal,
-    window=7
-)
+def normalize(signal):
 
-print("✅ Signal Smoothed")
+    signal = np.asarray(signal, dtype=float)
+
+    signal = signal - np.mean(signal)
+
+    std = np.std(signal)
+
+    if std > 0:
+        signal = signal / std
+
+    return signal
+
 
 # ==================================================
 # PEAK DETECTION
 # ==================================================
 
-peaks = []
+def detect_peaks(signal, fps, threshold_factor=0.8, min_gap_seconds=0.4):
 
-threshold = (
-    np.mean(signal)
-    + (0.8 * np.std(signal))
-)
+    threshold = np.mean(signal) + (threshold_factor * np.std(signal))
 
-last_peak = -999
+    min_distance = max(1, int(fps * min_gap_seconds))
 
-min_distance = int(
-    fps * 0.4
-)
+    peaks = []
+    last_peak = -999
 
-for i in range(1, len(signal) - 1):
+    for i in range(1, len(signal) - 1):
 
-    is_peak = (
+        is_peak = (
+            signal[i] > signal[i - 1]
+            and signal[i] > signal[i + 1]
+            and signal[i] > threshold
+        )
 
-        signal[i] > signal[i - 1]
+        if is_peak and (i - last_peak) > min_distance:
+            peaks.append(i)
+            last_peak = i
 
-        and
+    return np.array(peaks, dtype=int)
 
-        signal[i] > signal[i + 1]
-
-        and
-
-        signal[i] > threshold
-    )
-
-    if is_peak and (
-        i - last_peak
-    ) > min_distance:
-
-        peaks.append(i)
-
-        last_peak = i
-
-peaks = np.array(peaks)
-
-print("\n========== PEAK DETECTION ==========")
-
-print("Detected Peaks:", len(peaks))
 
 # ==================================================
-# BPM ESTIMATION
+# ANALYZE SIGNAL
 # ==================================================
 
-duration_seconds = len(signal) / fps
+def analyze_signal(
+    signal,
+    fps,
+    signal_quality=85,
+    face_visibility=100,
+    save=True,
+):
+    """
+    Normalize, smooth, detect peaks, estimate BPM and alertness.
 
-estimated_bpm = (
-    len(peaks) / duration_seconds
-) * 60
+    Returns a dict, or None if the signal is too short to analyze.
+    """
 
-estimated_bpm = max(
-    40,
-    min(
-        estimated_bpm,
-        180
-    )
-)
+    if signal is None or len(signal) < 10:
+        print("⚠️ Signal too short to analyze.")
+        return None
 
-print("\n========== HEART RATE ==========")
+    if not fps or fps <= 0:
+        fps = 30.0
 
-print(
-    f"Estimated BPM: {estimated_bpm:.1f}"
-)
+    print("\n========== ANALYZING SIGNAL ==========")
+    print("Samples:", len(signal))
+    print("Video FPS:", fps)
 
-# ==================================================
-# CALCULATE ALERTNESS SCORE
-# ==================================================
+    # Normalize + smooth
+    signal = normalize(signal)
+    signal = moving_average(signal, window=7)
 
-alertness_score = (
-    calculate_alertness_score(
+    # Peaks
+    peaks = detect_peaks(signal, fps)
+
+    print("Detected Peaks:", len(peaks))
+
+    # BPM
+    duration_seconds = len(signal) / fps
+
+    raw_bpm = (len(peaks) / duration_seconds) * 60
+
+    # Clamp to a plausible human range
+    estimated_bpm = max(40, min(raw_bpm, 180))
+
+    print(f"Estimated BPM: {estimated_bpm:.1f} (raw {raw_bpm:.1f})")
+
+    # Alertness
+    alertness_score = calculate_alertness_score(
         bpm=estimated_bpm,
-        signal_quality=85,
-        face_visibility=100
+        signal_quality=signal_quality,
+        face_visibility=face_visibility
     )
-)
 
-status = (
-    get_alertness_status(
-        alertness_score
-    )
-)
+    status = get_alertness_status(alertness_score)
 
-print("\n========== ALERTNESS ==========")
+    print(f"Alertness Score: {alertness_score}")
+    print(f"Status: {status}")
 
-print(
-    f"Alertness Score: {alertness_score}"
-)
+    # Save
+    if save:
 
-print(
-    f"Status: {status}"
-)
+        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+
+        alertness_file = RESULTS_DIR / "alertness_score.npy"
+
+        np.save(alertness_file, np.array([alertness_score]))
+
+        print("✅ Alertness Score Saved:", alertness_file)
+
+    return {
+        "signal": signal,
+        "peaks": peaks,
+        "fps": float(fps),
+        "bpm": float(estimated_bpm),
+        "raw_bpm": float(raw_bpm),
+        "alertness_score": alertness_score,
+        "status": status,
+    }
+
 
 # ==================================================
-# SAVE ALERTNESS SCORE
+# LOAD SAVED SIGNAL
 # ==================================================
 
-alertness_file = (
-    RESULTS_DIR /
-    "alertness_score.npy"
-)
+def analyze_saved_signal(**kwargs):
+    """Load green_signal.npy and video_fps.npy from RESULTS_DIR."""
 
-np.save(
-    alertness_file,
-    np.array([alertness_score])
-)
+    signal_file = RESULTS_DIR / "green_signal.npy"
+    fps_file = RESULTS_DIR / "video_fps.npy"
 
-print("\n✅ Alertness Score Saved")
+    if not signal_file.exists() or not fps_file.exists():
+        raise FileNotFoundError(
+            f"Run rppg.py first. Missing signal files in {RESULTS_DIR}"
+        )
 
-print(alertness_file)
+    signal = np.load(signal_file)
+    fps = float(np.load(fps_file)[0])
+
+    return analyze_signal(signal, fps, **kwargs)
+
 
 # ==================================================
 # PLOT WAVEFORM
 # ==================================================
 
-plt.figure(
-    figsize=(12, 5)
-)
+def plot_waveform(result):
+    """Return a matplotlib Figure of the pulse waveform."""
 
-plt.plot(
-    signal,
-    color="green",
-    linewidth=1.5,
-    label="Pulse Waveform"
-)
+    from matplotlib.figure import Figure
 
-if len(peaks) > 0:
+    signal = result["signal"]
+    peaks = result["peaks"]
 
-    plt.scatter(
-        peaks,
-        signal[peaks],
-        color="red",
-        s=30,
-        label="Detected Peaks"
+    # Figure() (not plt.figure) is safe to use from Streamlit threads
+    fig = Figure(figsize=(12, 5))
+    ax = fig.subplots()
+
+    ax.plot(
+        signal,
+        color="green",
+        linewidth=1.5,
+        label="Pulse Waveform"
     )
 
-plt.title(
-    "rPPG Pulse Waveform"
-)
+    if len(peaks) > 0:
+        ax.scatter(
+            peaks,
+            signal[peaks],
+            color="red",
+            s=30,
+            label="Detected Peaks"
+        )
 
-plt.xlabel(
-    "Frame Number"
-)
+    ax.set_title("rPPG Pulse Waveform")
+    ax.set_xlabel("Frame Number")
+    ax.set_ylabel("Normalized Signal")
+    ax.grid(True)
+    ax.legend()
 
-plt.ylabel(
-    "Normalized Signal"
-)
+    fig.tight_layout()
 
-plt.grid(True)
+    return fig
 
-plt.legend()
-
-plt.tight_layout()
-
-plt.show()
 
 # ==================================================
-# FINAL REPORT
+# APPLICATION ENTRY POINT
 # ==================================================
 
-print("\n========== FINAL REPORT ==========")
+if __name__ == "__main__":
 
-print(
-    f"Signal Samples: {len(signal)}"
-)
+    import matplotlib.pyplot as plt
 
-print(
-    f"Detected Peaks: {len(peaks)}"
-)
+    result = analyze_saved_signal()
 
-print(
-    f"Estimated BPM: {estimated_bpm:.1f}"
-)
+    if result is not None:
 
-print(
-    f"Alertness Score: {alertness_score}"
-)
+        signal = result["signal"]
+        peaks = result["peaks"]
 
-print(
-    f"Status: {status}"
-)
+        plt.figure(figsize=(12, 5))
+        plt.plot(signal, color="green", linewidth=1.5, label="Pulse Waveform")
 
-print("\n✅ Stage Complete")
+        if len(peaks) > 0:
+            plt.scatter(
+                peaks,
+                signal[peaks],
+                color="red",
+                s=30,
+                label="Detected Peaks"
+            )
+
+        plt.title("rPPG Pulse Waveform")
+        plt.xlabel("Frame Number")
+        plt.ylabel("Normalized Signal")
+        plt.grid(True)
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
+
+        print("\n========== FINAL REPORT ==========")
+        print(f"Signal Samples: {len(signal)}")
+        print(f"Detected Peaks: {len(peaks)}")
+        print(f"Estimated BPM: {result['bpm']:.1f}")
+        print(f"Alertness Score: {result['alertness_score']}")
+        print(f"Status: {result['status']}")
+
+        print("\n✅ Stage Complete")

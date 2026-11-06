@@ -1,7 +1,21 @@
-venv/
+# Python
 __pycache__/
 *.pyc
+
+# Virtual environment
+venv/
+.env
+
+# Streamlit
+.streamlit/
+
+# macOS
 .DS_Store
 
-Backend/results/*.json
-Backend/data/student_photos/*
+# Generated results
+Backend/results/*.npy
+
+# Uploaded videos
+*.mp4
+*.avi
+*.mov
